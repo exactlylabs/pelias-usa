@@ -1,0 +1,92 @@
+### to be run on an Azure D4as_v4 Debian 10 machine
+
+sudo apt-get update
+sudo apt-get upgrade -y
+
+### Install Docker
+# Prereqs for Docker
+sudo apt-get install -y \
+    apt-transport-https \
+    ca-certificates \
+    curl \
+    gnupg-agent \
+    software-properties-common
+
+# Add docker repo
+curl -fsSL https://download.docker.com/linux/debian/gpg | sudo apt-key add -
+sudo apt-key fingerprint 0EBFCD88
+sudo add-apt-repository \
+   "deb [arch=amd64] https://download.docker.com/linux/debian \
+   $(lsb_release -cs) \
+   stable"
+
+sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io
+sudo curl -L "https://github.com/docker/compose/releases/download/1.26.2/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+sudo chmod +x /usr/local/bin/docker-compose
+
+###### sudo usermod -aG docker $USER
+###### TODO: How to reload groups in script?... for now run all pelias commands as sudo
+
+### setup drive
+sudo mkfs.ext4 /dev/sdc
+sudo mkdir -p /mnt/persist
+sudo mount /dev/sdc /mnt/persist
+sudo chown $(whoami) /mnt/persist/
+
+### Install Pelias
+git clone https://github.com/pelias/docker.git  $HOME/pelias-docker
+sudo ln -s $HOME/pelias-docker/pelias /usr/local/bin/pelias
+
+### Setup USA Config
+git clone https://github.com/exactlylabs/pelias-usa.git
+cd pelias-usa
+
+sed -i '/DATA_DIR/d' .env
+echo 'DATA_DIR=/mnt/persist' >> .env
+
+sed -i '/DOCKER_USER/d' .env
+echo "DOCKER_USER=$(id -u)" >> .env
+
+mkdir /mnt/persist/polylines
+wget https://data.geocode.earth/osm/2020-30/north-america-valhalla.polylines.0sv.gz
+gunzip north-america-valhalla.polylines.0sv.gz
+mv north-america-valhalla.polylines.0sv /mnt/persist/polylines/extract.0sv
+
+# Setup pelias + download files
+sudo pelias compose pull
+sudo pelias elastic start
+sudo pelias elastic wait
+sudo pelias elastic create
+sudo pelias download all
+
+sudo shutdown -h now
+###### Convert machine to HB120rs v2
+###### Boot and log back in
+
+mkdir -p /mnt/fast
+mount -t tmpfs -o size=300gb tmpfs /mnt/fast
+sudo mount /dev/sdc /mnt/persist
+
+cp -R /mnt/persist/* /mnt/fast
+cd pelias-usa
+sed -i '/DATA_DIR/d' .env
+echo 'DATA_DIR=/mnt/fast' >> .env
+
+sudo pelias prepare placeholder
+sudo pelias import all
+
+sudo pelias kill
+sudo rm -rf /mnt/persist/*
+sudo mv /mnt/fast/* /mnt/persist
+
+
+sed -i '/DATA_DIR/d' .env
+echo 'DATA_DIR=/mnt/persist' >> .env
+
+sudo shutdown -h now
+###### Convert machine back to D4as_v4
+###### Boot and log back in
+
+cd pelias-usa
+sudo pelias compose up
